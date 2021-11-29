@@ -19,8 +19,8 @@
   type Welcome = typeof welcome;
 
   const CHAT_HISTORY_SIZE = 150;
-  const TRUNCATE_SIZE = 20;
-  let messageActions: (Chat.MessageAction | Welcome)[] = [];
+  // const TRUNCATE_SIZE = 20;
+  // let messageActions: (Chat.MessageAction | Welcome)[] = [];
   let pinned: Ytc.ParsedPinned | null;
   let div: HTMLElement;
   let isAtBottom = true;
@@ -28,8 +28,13 @@
   let truncateInterval: number;
   const isReplay = paramsIsReplay;
 
+  const messages: Array<Chat.MessageAction | Welcome> = new Array(CHAT_HISTORY_SIZE);
+  let current = 0;
+  type MessageRotate = { index: number, message: Chat.MessageAction | Welcome, shown: boolean };
+  let rotating: MessageRotate[] = [];
+
   const isWelcome = (m: Chat.MessageAction | Welcome): m is Welcome =>
-    'welcome' in m;
+    m != null ? 'welcome' in m : false;
 
   const checkAtBottom = () => {
     isAtBottom =
@@ -40,29 +45,50 @@
     div.scrollTop = div.scrollHeight;
   };
 
-  const checkTruncateMessages = (): void => {
-    const diff = messageActions.length - CHAT_HISTORY_SIZE;
-    if (diff > TRUNCATE_SIZE) messageActions.splice(0, diff);
-    messageActions = messageActions;
+  const updateRotatingArray = () => {
+    const result = [];
+    for (let i = 0; i < 2 * messages.length - 1; i++) {
+      const message = messages[i % messages.length];
+      result.push({
+        index: i,
+        message,
+        shown: message != null && i >= current && i < current + messages.length
+      });
+    }
+    rotating = result;
   };
+
+  // const checkTruncateMessages = (): void => {
+  //   const diff = messageActions.length - CHAT_HISTORY_SIZE;
+  //   if (diff > TRUNCATE_SIZE) messageActions.splice(0, diff);
+  //   messageActions = messageActions;
+  // };
 
   const newMessages = (
     messagesAction: Chat.MessagesAction, isInitial: boolean
   ) => {
     if (!isAtBottom) return;
-    // Filter out initial messages on replays that aren't negative timestamped
-    messageActions.push(...(
-      isInitial && isReplay
-        ? messagesAction.messages.filter(
-          (a) => a.message.timestamp.startsWith('-')
-        )
-        : messagesAction.messages
-    ));
-    if (!isInitial) checkTruncateMessages();
+    messagesAction.messages.forEach((m) => {
+      // Filter out initial messages on replays that aren't negative timestamped
+      if (isInitial && isReplay && !m.message.timestamp.startsWith('-')) return;
+      messages[current] = m;
+      current++;
+      current %= messages.length;
+    });
+    if (isInitial) messages.push(welcome);
+    updateRotatingArray();
+    // messageActions.push(...(
+    //   isInitial && isReplay
+    //     ? messagesAction.messages.filter(
+    //       (a) => a.message.timestamp.startsWith('-')
+    //     )
+    //     : messagesAction.messages
+    // ));
+    // if (!isInitial) checkTruncateMessages();
   };
 
   const onBonk = (bonk: Ytc.ParsedBonk) => {
-    messageActions.forEach((action) => {
+    messages.forEach((action) => {
       if (isWelcome(action)) return;
       if (action.message.author.id === bonk.authorId) {
         action.deleted = { replace: bonk.replacedMessage };
@@ -71,7 +97,7 @@
   };
 
   const onDelete = (deletion: Ytc.ParsedDeleted) => {
-    messageActions.some((action) => {
+    messages.some((action) => {
       if (isWelcome(action)) return false;
       if (action.message.messageId === deletion.messageId) {
         action.deleted = { replace: deletion.replacedMessage };
@@ -99,7 +125,8 @@
         pinned = null;
         break;
       case 'forceUpdate':
-        messageActions = [...action.messages];
+        // messages = [...action.messages];
+        newMessages({ type: 'messages', messages: action.messages }, isInitial);
         break;
     }
   };
@@ -115,7 +142,7 @@
         response.initialData.forEach((action) => {
           onChatAction(action, true);
         });
-        messageActions = [...messageActions, welcome];
+        // messageActions = [...messageActions, welcome];
         break;
       case 'themeUpdate':
         dark().set(response.dark);
@@ -174,16 +201,18 @@
 
 <div class={containerClass} style="font-size: 13px">
   <div class={contentClass} bind:this={div} on:scroll={checkAtBottom}>
-    {#each messageActions as action (action.message.messageId)}
-      <div class="my-2">
-        {#if isWelcome(action)}
-          <WelcomeMessage />
-        {:else if (action.message.superChat || action.message.superSticker)}
-          <PaidMessage message={action.message} />
-        {:else if action.message.membership}
-          <MembershipItem message={action.message} />
-        {:else}
-          <Message message={action.message} deleted={action.deleted} />
+    {#each rotating as rotate (rotate.index)}
+      <div class="my-2" class:hidden={!rotate.shown}>
+        {#if rotate.message != null}
+          {#if isWelcome(rotate.message)}
+            <WelcomeMessage />
+          {:else if (rotate.message.message.superChat || rotate.message.message.superSticker)}
+            <PaidMessage message={rotate.message.message} />
+          {:else if rotate.message.message.membership}
+            <MembershipItem message={rotate.message.message} />
+          {:else}
+            <Message message={rotate.message.message} deleted={rotate.message.deleted} />
+          {/if}
         {/if}
       </div>
     {/each}
